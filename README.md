@@ -2,11 +2,11 @@
 
 ## Info
 
-Name: John Doe
+Name: Wyatt Fong
 
-PID: A00000000
+PID: A18502576
 
-Email: jdoe@ucsd.edu
+Email: wyfong@ucsd.edu
 
 ## Description and Overview
 Describe in brief what files you changed and what they should do.
