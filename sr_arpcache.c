@@ -17,7 +17,29 @@
   See the comments in the header file for an idea of what it should look like.
 */
 void sr_arpcache_sweepreqs(struct sr_instance *sr) { 
-    /* Fill this in */
+    struct sr_arpreq *req = sr->cache.requests;
+    time_t now = time(NULL);
+
+    while (req) {
+        struct sr_arpreq *next = req->next;
+
+        if (difftime(now, req->sent) >= 1.0) {
+            if (req->times_sent >= 5) {
+                struct sr_packet *pkt;
+
+                for (pkt = req->packets; pkt; pkt = pkt->next) {
+                    sr_send_icmp_error(sr, pkt->buf, pkt->len, 3, 1);
+                }
+                sr_arpreq_destroy(&(sr->cache), req);
+            } else if (req->packets) {
+                sr_send_arp_request(sr, req->ip, req->packets->iface);
+                req->sent = now;
+                req->times_sent++;
+            }
+        }
+
+        req = next;
+    }
 }
 
 /* You should not need to touch the rest of this code. */
@@ -244,4 +266,3 @@ void *sr_arpcache_timeout(void *sr_ptr) {
     
     return NULL;
 }
-
