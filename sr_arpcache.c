@@ -9,7 +9,140 @@
 #include "sr_arpcache.h"
 #include "sr_router.h"
 #include "sr_if.h"
+#include "sr_rt.h"
 #include "sr_protocol.h"
+#include "sr_utils.h"
+
+static struct sr_rt *sr_arpcache_find_exact_route(struct sr_instance *sr,
+                                                  uint32_t ip);
+static void sr_arpcache_send_arp_request(struct sr_instance *sr, uint32_t ip,
+                                         const char *iface);
+static void sr_arpcache_send_host_unreachable(struct sr_instance *sr,
+                                              uint8_t *packet,
+                                              unsigned int len);
+
+static struct sr_rt *sr_arpcache_find_exact_route(struct sr_instance *sr,
+                                                  uint32_t ip)
+{
+    struct sr_rt *rt = sr->routing_table;
+
+    while (rt) {
+        if (rt->dest.s_addr == ip) {
+            return rt;
+        }
+        rt = rt->next;
+    }
+
+    return NULL;
+}
+
+static void sr_arpcache_send_arp_request(struct sr_instance *sr, uint32_t ip,
+                                         const char *iface)
+{
+    unsigned int len = sizeof(sr_ethernet_hdr_t) + sizeof(sr_arp_hdr_t);
+    uint8_t *request = (uint8_t *)malloc(len);
+    sr_ethernet_hdr_t *eth_hdr;
+    sr_arp_hdr_t *arp_hdr;
+    struct sr_if *out_iface = sr_get_interface(sr, iface);
+    unsigned char broadcast[ETHER_ADDR_LEN] =
+        { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+
+    if (!request || !out_iface) {
+        free(request);
+        return;
+    }
+
+    memset(request, 0, len);
+    eth_hdr = (sr_ethernet_hdr_t *)request;
+    arp_hdr = (sr_arp_hdr_t *)(request + sizeof(sr_ethernet_hdr_t));
+
+    memcpy(eth_hdr->ether_dhost, broadcast, ETHER_ADDR_LEN);
+    memcpy(eth_hdr->ether_shost, out_iface->addr, ETHER_ADDR_LEN);
+    eth_hdr->ether_type = htons(ethertype_arp);
+
+    arp_hdr->ar_hrd = htons(arp_hrd_ethernet);
+    arp_hdr->ar_pro = htons(ethertype_ip);
+    arp_hdr->ar_hln = ETHER_ADDR_LEN;
+    arp_hdr->ar_pln = 4;
+    arp_hdr->ar_op = htons(arp_op_request);
+    memcpy(arp_hdr->ar_sha, out_iface->addr, ETHER_ADDR_LEN);
+    arp_hdr->ar_sip = out_iface->ip;
+    memset(arp_hdr->ar_tha, 0, ETHER_ADDR_LEN);
+    arp_hdr->ar_tip = ip;
+
+    sr_send_packet(sr, request, len, iface);
+    free(request);
+}
+
+static void sr_arpcache_send_host_unreachable(struct sr_instance *sr,
+                                              uint8_t *packet,
+                                              unsigned int len)
+{
+    sr_ethernet_hdr_t *old_eth_hdr;
+    sr_ip_hdr_t *old_ip_hdr;
+    struct sr_rt *route;
+    struct sr_if *out_iface;
+    unsigned int reply_len;
+    uint8_t *reply;
+    sr_ethernet_hdr_t *eth_hdr;
+    sr_ip_hdr_t *ip_hdr;
+    sr_icmp_t11_hdr_t *icmp_hdr;
+
+    if (len < sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t)) {
+        return;
+    }
+
+    old_eth_hdr = (sr_ethernet_hdr_t *)packet;
+    old_ip_hdr = (sr_ip_hdr_t *)(packet + sizeof(sr_ethernet_hdr_t));
+    route = sr_arpcache_find_exact_route(sr, old_ip_hdr->ip_src);
+    if (!route) {
+        return;
+    }
+
+    out_iface = sr_get_interface(sr, route->interface);
+    if (!out_iface) {
+        return;
+    }
+
+    reply_len = sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) +
+                sizeof(sr_icmp_t11_hdr_t);
+    reply = (uint8_t *)malloc(reply_len);
+    if (!reply) {
+        return;
+    }
+
+    memset(reply, 0, reply_len);
+    eth_hdr = (sr_ethernet_hdr_t *)reply;
+    ip_hdr = (sr_ip_hdr_t *)(reply + sizeof(sr_ethernet_hdr_t));
+    icmp_hdr = (sr_icmp_t11_hdr_t *)((uint8_t *)ip_hdr + sizeof(sr_ip_hdr_t));
+
+    memcpy(eth_hdr->ether_dhost, old_eth_hdr->ether_shost, ETHER_ADDR_LEN);
+    memcpy(eth_hdr->ether_shost, out_iface->addr, ETHER_ADDR_LEN);
+    eth_hdr->ether_type = htons(ethertype_ip);
+
+    ip_hdr->ip_v = 4;
+    ip_hdr->ip_hl = sizeof(sr_ip_hdr_t) / 4;
+    ip_hdr->ip_tos = 0;
+    ip_hdr->ip_len = htons(sizeof(sr_ip_hdr_t) + sizeof(sr_icmp_t11_hdr_t));
+    ip_hdr->ip_id = 0;
+    ip_hdr->ip_off = 0;
+    ip_hdr->ip_ttl = INIT_TTL;
+    ip_hdr->ip_p = ip_protocol_icmp;
+    ip_hdr->ip_src = out_iface->ip;
+    ip_hdr->ip_dst = old_ip_hdr->ip_src;
+    ip_hdr->ip_sum = 0;
+    ip_hdr->ip_sum = cksum(ip_hdr, sizeof(sr_ip_hdr_t));
+
+    icmp_hdr->icmp_type = 3;
+    icmp_hdr->icmp_code = 1;
+    icmp_hdr->unused = 0;
+    memcpy(icmp_hdr->data, old_ip_hdr, ICMP_DATA_SIZE);
+    icmp_hdr->icmp_sum = 0;
+    icmp_hdr->icmp_sum = cksum(icmp_hdr, sizeof(sr_icmp_t11_hdr_t));
+
+    sr_send_packet(sr, reply, reply_len, out_iface->name);
+    free(reply);
+}
 
 /* 
   This function gets called every second. For each request sent out, we keep
@@ -17,7 +150,40 @@
   See the comments in the header file for an idea of what it should look like.
 */
 void sr_arpcache_sweepreqs(struct sr_instance *sr) { 
-    /* Fill this in */
+    struct sr_arpreq *req = sr->cache.requests;
+    time_t now = time(NULL);
+
+    while (req) {
+        struct sr_arpreq *next = req->next;
+
+        if (difftime(now, req->sent) >= 1.0) {
+            if (req->times_sent >= 5) {
+                struct sr_packet *pkt = req->packets;
+
+                while (pkt) {
+                    sr_arpcache_send_host_unreachable(sr, pkt->buf, pkt->len);
+                    pkt = pkt->next;
+                }
+                sr_arpreq_destroy(&(sr->cache), req);
+            } else if (req->packets) {
+                sr_arpcache_send_arp_request(sr, req->ip, req->packets->iface);
+                req->sent = now;
+                req->times_sent++;
+
+                if (req->times_sent >= 5) {
+                    struct sr_packet *pkt = req->packets;
+
+                    while (pkt) {
+                        sr_arpcache_send_host_unreachable(sr, pkt->buf, pkt->len);
+                        pkt = pkt->next;
+                    }
+                    sr_arpreq_destroy(&(sr->cache), req);
+                }
+            }
+        }
+
+        req = next;
+    }
 }
 
 /* You should not need to touch the rest of this code. */
@@ -244,4 +410,3 @@ void *sr_arpcache_timeout(void *sr_ptr) {
     
     return NULL;
 }
-
