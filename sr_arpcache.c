@@ -17,28 +17,58 @@
   See the comments in the header file for an idea of what it should look like.
 */
 void sr_arpcache_sweepreqs(struct sr_instance *sr) { 
-    struct sr_arpreq *req = sr->cache.requests;
     time_t now = time(NULL);
 
-    while (req) {
-        struct sr_arpreq *next = req->next;
+    while (1) {
+        struct sr_arpreq *req;
+        struct sr_arpreq *prev = NULL;
+        struct sr_arpreq *timed_out = NULL;
+        uint32_t arp_ip = 0;
+        char arp_iface[sr_IFACE_NAMELEN];
+        int send_arp = 0;
 
-        if (difftime(now, req->sent) >= 1.0) {
-            if (req->times_sent >= 5) {
-                struct sr_packet *pkt;
+        memset(arp_iface, 0, sizeof(arp_iface));
 
-                for (pkt = req->packets; pkt; pkt = pkt->next) {
-                    sr_send_icmp_error(sr, pkt->buf, pkt->len, 3, 1);
+        pthread_mutex_lock(&(sr->cache.lock));
+        for (req = sr->cache.requests; req; req = req->next) {
+            if (difftime(now, req->sent) < 1.0) {
+                prev = req;
+                continue;
+            }
+
+            if (!req->packets || req->times_sent >= 5) {
+                timed_out = req;
+                if (prev) {
+                    prev->next = req->next;
+                } else {
+                    sr->cache.requests = req->next;
                 }
-                sr_arpreq_destroy(&(sr->cache), req);
+                req->next = NULL;
             } else if (req->packets) {
-                sr_send_arp_request(sr, req->ip, req->packets->iface);
+                arp_ip = req->ip;
+                strncpy(arp_iface, req->packets->iface, sr_IFACE_NAMELEN);
                 req->sent = now;
                 req->times_sent++;
+                send_arp = 1;
             }
+
+            break;
+        }
+        pthread_mutex_unlock(&(sr->cache.lock));
+
+        if (!req) {
+            break;
         }
 
-        req = next;
+        if (timed_out) {
+            struct sr_packet *pkt;
+            for (pkt = timed_out->packets; pkt; pkt = pkt->next) {
+                sr_send_icmp_error(sr, pkt->buf, pkt->len, 3, 1);
+            }
+            sr_arpreq_destroy(&(sr->cache), timed_out);
+        } else if (send_arp) {
+            sr_send_arp_request(sr, arp_ip, arp_iface);
+        }
     }
 }
 
@@ -259,9 +289,10 @@ void *sr_arpcache_timeout(void *sr_ptr) {
             }
         }
         
+        pthread_mutex_unlock(&(cache->lock));
+
         sr_arpcache_sweepreqs(sr);
 
-        pthread_mutex_unlock(&(cache->lock));
     }
     
     return NULL;
