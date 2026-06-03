@@ -15,6 +15,8 @@
 
 static struct sr_rt *sr_arpcache_find_exact_route(struct sr_instance *sr,
                                                   uint32_t ip);
+static struct sr_if *sr_arpcache_find_iface_by_mac(struct sr_instance *sr,
+                                                   unsigned char *mac);
 static void sr_arpcache_send_arp_request(struct sr_instance *sr, uint32_t ip,
                                          const char *iface);
 static void sr_arpcache_send_host_unreachable(struct sr_instance *sr,
@@ -31,6 +33,21 @@ static struct sr_rt *sr_arpcache_find_exact_route(struct sr_instance *sr,
             return rt;
         }
         rt = rt->next;
+    }
+
+    return NULL;
+}
+
+static struct sr_if *sr_arpcache_find_iface_by_mac(struct sr_instance *sr,
+                                                   unsigned char *mac)
+{
+    struct sr_if *iface = sr->if_list;
+
+    while (iface) {
+        if (memcmp(iface->addr, mac, ETHER_ADDR_LEN) == 0) {
+            return iface;
+        }
+        iface = iface->next;
     }
 
     return NULL;
@@ -94,14 +111,17 @@ static void sr_arpcache_send_host_unreachable(struct sr_instance *sr,
 
     old_eth_hdr = (sr_ethernet_hdr_t *)packet;
     old_ip_hdr = (sr_ip_hdr_t *)(packet + sizeof(sr_ethernet_hdr_t));
-    route = sr_arpcache_find_exact_route(sr, old_ip_hdr->ip_src);
-    if (!route) {
-        return;
-    }
-
-    out_iface = sr_get_interface(sr, route->interface);
+    out_iface = sr_arpcache_find_iface_by_mac(sr, old_eth_hdr->ether_dhost);
     if (!out_iface) {
-        return;
+        route = sr_arpcache_find_exact_route(sr, old_ip_hdr->ip_src);
+        if (!route) {
+            return;
+        }
+
+        out_iface = sr_get_interface(sr, route->interface);
+        if (!out_iface) {
+            return;
+        }
     }
 
     reply_len = sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) +
