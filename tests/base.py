@@ -129,7 +129,12 @@ class CSE123TestBase(unittest.TestCase):
         rtables_path = os.path.join("rtables", router_rtable)
         if os.path.exists(os.path.join(self.SUBMISSION_DIR, rtables_path)):
             return rtables_path
-        return router_rtable
+        if os.path.exists(os.path.join(self.SUBMISSION_DIR, router_rtable)):
+            return router_rtable
+        raise AssertionError(
+            "Missing routing table {}. Copy PA2b rtables with: "
+            "cp /project-base/rtable* rtables/".format(router_rtable)
+        )
 
     def setUpEnvironment(self, rtable='rtable', build=True, debug=False,
                          manual_sr=False, pa2b=False, router_specs=None):
