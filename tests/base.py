@@ -53,10 +53,10 @@ class cd:
 Base unit test class for all tests. Contains environment setup and test utility functions.
 """
 class CSE123TestBase(unittest.TestCase):
-    TEST_DIR = os.getcwd()
+    TEST_DIR = os.path.dirname(os.path.abspath(__file__))
     LOCK_FILE = os.path.join(TEST_DIR, 'test.lock')
 
-    SUBMISSION_DIR = os.path.join(TEST_DIR, "..")
+    SUBMISSION_DIR = os.path.dirname(TEST_DIR)
     VNET_BASE_PATH = "/project-base/"
 
     NODES = ('server1', 'server2', 'client')
@@ -91,7 +91,48 @@ class CSE123TestBase(unittest.TestCase):
             print("Cleaning up ... ")
             os.remove(self.LOCK_FILE)
 
-    def setUpEnvironment(self, rtable='rtable', build=True, debug=False, manual_sr=False):
+    def _peer_intf(self, host):
+        link = host.defaultIntf().link
+        return link.intf1 if link.intf1.node != host else link.intf2
+
+    def _host_info(self, host_name, default_ip, default_gw):
+        host = self.mininet.get(host_name)
+        peer_intf = self._peer_intf(host)
+        peer_node = peer_intf.node
+        host_ip = IP_SETTING.get(host_name, default_ip)
+        gw_ip = IP_SETTING.get(peer_intf.name, default_gw)
+
+        return {
+            "ip": host_ip,
+            "gw": gw_ip,
+            "m": host,
+            "mac": host.MAC(),
+            "gwmac": peer_node.MAC(intf=peer_intf.name),
+            "gw_node": peer_node.name,
+            "gw_intf": peer_intf.name,
+        }
+
+    def _start_router(self, router_path, args, log_name):
+        log = open(os.path.join(self.SUBMISSION_DIR, log_name), 'w')
+        router = pexpect.spawn(
+            router_path,
+            args,
+            logfile=log,
+            encoding="utf-8"
+        )
+        router.expect('<-- Ready to process packets -->', timeout=15)
+        self.router_logs.append(log)
+        self.routers.append(router)
+        return router
+
+    def _router_rtable_path(self, router_rtable):
+        rtables_path = os.path.join("rtables", router_rtable)
+        if os.path.exists(os.path.join(self.SUBMISSION_DIR, rtables_path)):
+            return rtables_path
+        return router_rtable
+
+    def setUpEnvironment(self, rtable='rtable', build=True, debug=False,
+                         manual_sr=False, pa2b=False, router_specs=None):
 
         global IPBASE, IP_SETTING
 
@@ -113,6 +154,8 @@ class CSE123TestBase(unittest.TestCase):
         self.pox = None
         self.mininet = None
         self.router = None
+        self.routers = []
+        self.router_logs = []
 
         pox_path = os.path.join(self.VNET_BASE_PATH, 'pox', 'pox.py')
         os.environ["PYTHONPATH"] = os.path.join(self.VNET_BASE_PATH, 'pox_module')
@@ -161,44 +204,43 @@ class CSE123TestBase(unittest.TestCase):
             if manual_sr:
                 input("Start router now and hit enter:")
             else:
-                self.router_log = open(os.path.join(self.SUBMISSION_DIR, 'test_sr.log'), 'w')
-                self.router = pexpect.spawn(
-                    router_path,
-                    ["-l", "test.pcap"],
-                    logfile=self.router_log,
-                    encoding="utf-8"
-                )
-                self.router.expect('<-- Ready to process packets -->', timeout=3)
-                logging.info("Router started.")
+                if pa2b:
+                    if router_specs is None:
+                        router_specs = [
+                            ("sw1", "rtable1"),
+                            ("sw2", "rtable2"),
+                            ("sw3", "rtable3"),
+                            ("sw4", "rtable4"),
+                        ]
 
-        self.pcap_stream_client = PacketTest(clintf.link.intf2.name, client, debug=debug)
-        self.pcap_stream_server1 = PacketTest(s1intf.link.intf2.name, server1, debug=debug)
-        self.pcap_stream_server2 = PacketTest(s2intf.link.intf2.name, server2, debug=debug)
+                    for index, (vhost, router_rtable) in enumerate(router_specs, 1):
+                        args = [
+                            "-l", "test{}.pcap".format(index),
+                            "-v", vhost,
+                            "-r", self._router_rtable_path(router_rtable),
+                        ]
+                        self._start_router(router_path, args,
+                                           "test_sr_{}.log".format(vhost))
+                    self.router = self.routers[0] if self.routers else None
+                    logging.info("PA2b routers started.")
+                else:
+                    self.router = self._start_router(
+                        router_path,
+                        ["-l", "test.pcap"],
+                        "test_sr.log"
+                    )
+                    logging.info("Router started.")
+
+        self.pcap_stream_client = PacketTest(self._peer_intf(client).name, client, debug=debug)
+        self.pcap_stream_server1 = PacketTest(self._peer_intf(server1).name, server1, debug=debug)
+        self.pcap_stream_server2 = PacketTest(self._peer_intf(server2).name, server2, debug=debug)
         self.pcap_stream_client.run()
         self.pcap_stream_server1.run()
         self.pcap_stream_server2.run()
 
-        self.client = {
-            "ip": "10.0.1.100",
-            "gw": "10.0.1.1",
-            "m": self.mininet.get("client"),
-            "mac": self.mininet.get("client").MAC(),
-            "gwmac": self.mininet.get("sw0").MAC(intf=self.mininet.get("client").defaultIntf().link.intf2.name),
-        }
-        self.server1 = {
-            "ip": "192.168.2.2",
-            "gw": "192.168.2.1",
-            "m": self.mininet.get("server1"),
-            "mac": self.mininet.get("server1").MAC(),
-            "gwmac": self.mininet.get("sw0").MAC(intf=self.mininet.get("server1").defaultIntf().link.intf2.name),
-        }
-        self.server2 = {
-            "ip": "172.64.3.10",
-            "gw": "172.64.3.1",
-            "m": self.mininet.get("server2"),
-            "mac": self.mininet.get("server2").MAC(),
-            "gwmac": self.mininet.get("sw0").MAC(intf=self.mininet.get("server2").defaultIntf().link.intf2.name),
-        }
+        self.client = self._host_info("client", "10.0.1.100", "10.0.1.1")
+        self.server1 = self._host_info("server1", "192.168.2.2", "192.168.2.1")
+        self.server2 = self._host_info("server2", "172.64.3.10", "172.64.3.1")
         self.gateways = list(map(lambda x: x["gw"], [self.client, self.server1, self.server2]))
 
     def tearDownEnvironment(self):
@@ -208,12 +250,14 @@ class CSE123TestBase(unittest.TestCase):
         self.pcap_stream_server1.stop()
         self.pcap_stream_server2.stop()
 
-        if self.router:
-            if not self.router.terminate(force=True):
+        for router in self.routers:
+            if not router.terminate(force=True):
                 print("Could not stop router")
-            self.router.close()
-            self.router_log.flush()
-            self.router_log.close()
+            router.close()
+
+        for router_log in self.router_logs:
+            router_log.flush()
+            router_log.close()
 
         if not self.pox.terminate(force=True):
             print("Could not stop pox")
@@ -314,6 +358,8 @@ class PacketTest:
     def __init__(self, host_iface, mn_node, debug=False) -> None:
         self.iface = host_iface
         self.node = mn_node
+        self.sender_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                        'remote_sender.py')
         self.stream = None
         self.buffer = Queue()
         self.debug = debug
@@ -366,7 +412,7 @@ class PacketTest:
             self.buffer.not_full.notify_all()
 
     def sendPkt(self, pkt):
-        proc = self.node.popen(['python3', 'remote_sender.py'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc = self.node.popen(['python3', self.sender_path], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         result = proc.communicate(input=pkt.build())
         assert(len(result) > 0)
         result = re.findall("sent ([0-9]+) bytes", str(result[0]))
