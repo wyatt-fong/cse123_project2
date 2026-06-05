@@ -26,7 +26,9 @@
 #include "sr_utils.h"
 
 static int sr_is_router_ip(struct sr_instance* sr, uint32_t ip);
-static struct sr_rt* sr_find_exact_route(struct sr_instance* sr, uint32_t ip);
+static struct sr_if* sr_find_iface_by_mac(struct sr_instance* sr,
+                                          const unsigned char* mac);
+static struct sr_rt* sr_find_lpm_route(struct sr_instance* sr, uint32_t ip);
 static int sr_valid_ip_packet(uint8_t* packet, unsigned int len);
 static void sr_handle_arp(struct sr_instance* sr, uint8_t* packet,
                           unsigned int len, char* interface);
@@ -125,18 +127,39 @@ static int sr_is_router_ip(struct sr_instance* sr, uint32_t ip)
   return 0;
 }
 
-static struct sr_rt* sr_find_exact_route(struct sr_instance* sr, uint32_t ip)
+static struct sr_if* sr_find_iface_by_mac(struct sr_instance* sr,
+                                          const unsigned char* mac)
+{
+  struct sr_if* iface = sr->if_list;
+
+  while (iface) {
+    if (memcmp(iface->addr, mac, ETHER_ADDR_LEN) == 0) {
+      return iface;
+    }
+    iface = iface->next;
+  }
+
+  return NULL;
+}
+
+static struct sr_rt* sr_find_lpm_route(struct sr_instance* sr, uint32_t ip)
 {
   struct sr_rt* rt = sr->routing_table;
+  struct sr_rt* best = NULL;
+  uint32_t best_mask = 0;
 
   while (rt) {
-    if (rt->dest.s_addr == ip) {
-      return rt;
+    uint32_t mask = ntohl(rt->mask.s_addr);
+
+    if ((ip & rt->mask.s_addr) == (rt->dest.s_addr & rt->mask.s_addr) &&
+        (!best || mask > best_mask)) {
+      best = rt;
+      best_mask = mask;
     }
     rt = rt->next;
   }
 
-  return NULL;
+  return best;
 }
 
 static int sr_valid_ip_packet(uint8_t* packet, unsigned int len)
@@ -187,6 +210,10 @@ static void sr_handle_arp(struct sr_instance* sr, uint8_t* packet,
       sr_send_arp_reply(sr, arp_hdr, interface);
     }
   } else if (ntohs(arp_hdr->ar_op) == arp_op_reply) {
+    if (!sr_is_router_ip(sr, arp_hdr->ar_tip)) {
+      return;
+    }
+
     req = sr_arpcache_insert(&(sr->cache), arp_hdr->ar_sha, arp_hdr->ar_sip);
     if (req) {
       for (queued_pkt = req->packets; queued_pkt; queued_pkt = queued_pkt->next) {
@@ -232,6 +259,8 @@ static void sr_handle_ip(struct sr_instance* sr, uint8_t* packet,
       } else {
         icmp_hdr->icmp_sum = received_sum;
       }
+    } else if (ip_hdr->ip_p == ip_protocol_tcp || ip_hdr->ip_p == ip_protocol_udp) {
+      sr_send_icmp_error(sr, packet, len, 3, 3);
     }
     return;
   }
@@ -371,9 +400,9 @@ static void sr_send_icmp_error(struct sr_instance* sr, uint8_t* packet,
 {
   sr_ip_hdr_t* old_ip_hdr;
   sr_ethernet_hdr_t* old_eth_hdr;
-  struct sr_rt* route;
   struct sr_if* out_iface;
-  unsigned int old_ip_header_len;
+  unsigned int old_ip_len;
+  unsigned int icmp_data_len;
   unsigned int reply_len;
   uint8_t* reply;
   sr_ethernet_hdr_t* eth_hdr;
@@ -386,15 +415,19 @@ static void sr_send_icmp_error(struct sr_instance* sr, uint8_t* packet,
 
   old_eth_hdr = (sr_ethernet_hdr_t*)packet;
   old_ip_hdr = (sr_ip_hdr_t*)(packet + sizeof(sr_ethernet_hdr_t));
-  old_ip_header_len = old_ip_hdr->ip_hl * 4;
-  route = sr_find_exact_route(sr, old_ip_hdr->ip_src);
-  if (!route) {
-    return;
-  }
-
-  out_iface = sr_get_interface(sr, route->interface);
+  old_ip_len = ntohs(old_ip_hdr->ip_len);
+  out_iface = sr_find_iface_by_mac(sr, old_eth_hdr->ether_dhost);
   if (!out_iface) {
-    return;
+    struct sr_rt* route = sr_find_lpm_route(sr, old_ip_hdr->ip_src);
+
+    if (!route) {
+      return;
+    }
+
+    out_iface = sr_get_interface(sr, route->interface);
+    if (!out_iface) {
+      return;
+    }
   }
 
   reply_len = sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) +
@@ -429,7 +462,8 @@ static void sr_send_icmp_error(struct sr_instance* sr, uint8_t* packet,
   icmp_hdr->icmp_type = type;
   icmp_hdr->icmp_code = code;
   icmp_hdr->unused = 0;
-  memcpy(icmp_hdr->data, old_ip_hdr, ICMP_DATA_SIZE);
+  icmp_data_len = old_ip_len < ICMP_DATA_SIZE ? old_ip_len : ICMP_DATA_SIZE;
+  memcpy(icmp_hdr->data, old_ip_hdr, icmp_data_len);
   icmp_hdr->icmp_sum = 0;
   icmp_hdr->icmp_sum = cksum(icmp_hdr, sizeof(sr_icmp_t11_hdr_t));
 
@@ -441,9 +475,12 @@ static void sr_forward_ip_packet(struct sr_instance* sr, uint8_t* packet,
                                  unsigned int len)
 {
   sr_ip_hdr_t* ip_hdr = (sr_ip_hdr_t*)(packet + sizeof(sr_ethernet_hdr_t));
-  struct sr_rt* route = sr_find_exact_route(sr, ip_hdr->ip_dst);
+  sr_ethernet_hdr_t* eth_hdr;
+  struct sr_rt* route = sr_find_lpm_route(sr, ip_hdr->ip_dst);
   struct sr_if* out_iface;
+  struct sr_arpentry* entry;
   struct sr_arpreq* req;
+  uint32_t next_hop_ip;
   uint8_t* forwarded_packet;
 
   if (!route) {
@@ -462,7 +499,20 @@ static void sr_forward_ip_packet(struct sr_instance* sr, uint8_t* packet,
   }
 
   memcpy(forwarded_packet, packet, len);
-  req = sr_arpcache_queuereq(&(sr->cache), route->gw.s_addr,
+  eth_hdr = (sr_ethernet_hdr_t*)forwarded_packet;
+  next_hop_ip = route->gw.s_addr ? route->gw.s_addr : ip_hdr->ip_dst;
+  entry = sr_arpcache_lookup(&(sr->cache), next_hop_ip);
+
+  if (entry) {
+    memcpy(eth_hdr->ether_dhost, entry->mac, ETHER_ADDR_LEN);
+    memcpy(eth_hdr->ether_shost, out_iface->addr, ETHER_ADDR_LEN);
+    sr_send_packet(sr, forwarded_packet, len, out_iface->name);
+    free(entry);
+    free(forwarded_packet);
+    return;
+  }
+
+  req = sr_arpcache_queuereq(&(sr->cache), next_hop_ip,
                              forwarded_packet, len, out_iface->name);
 
   if (req && req->times_sent == 0) {

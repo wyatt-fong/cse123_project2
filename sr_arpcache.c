@@ -27,15 +27,21 @@ static struct sr_rt *sr_arpcache_find_exact_route(struct sr_instance *sr,
                                                   uint32_t ip)
 {
     struct sr_rt *rt = sr->routing_table;
+    struct sr_rt *best = NULL;
+    uint32_t best_mask = 0;
 
     while (rt) {
-        if (rt->dest.s_addr == ip) {
-            return rt;
+        uint32_t mask = ntohl(rt->mask.s_addr);
+
+        if ((ip & rt->mask.s_addr) == (rt->dest.s_addr & rt->mask.s_addr) &&
+            (!best || mask > best_mask)) {
+            best = rt;
+            best_mask = mask;
         }
         rt = rt->next;
     }
 
-    return NULL;
+    return best;
 }
 
 static struct sr_if *sr_arpcache_find_iface_by_mac(struct sr_instance *sr,
@@ -97,6 +103,8 @@ static void sr_arpcache_send_host_unreachable(struct sr_instance *sr,
 {
     sr_ethernet_hdr_t *old_eth_hdr;
     sr_ip_hdr_t *old_ip_hdr;
+    unsigned int old_ip_len;
+    unsigned int icmp_data_len;
     struct sr_rt *route;
     struct sr_if *out_iface;
     unsigned int reply_len;
@@ -111,6 +119,7 @@ static void sr_arpcache_send_host_unreachable(struct sr_instance *sr,
 
     old_eth_hdr = (sr_ethernet_hdr_t *)packet;
     old_ip_hdr = (sr_ip_hdr_t *)(packet + sizeof(sr_ethernet_hdr_t));
+    old_ip_len = ntohs(old_ip_hdr->ip_len);
     out_iface = sr_arpcache_find_iface_by_mac(sr, old_eth_hdr->ether_dhost);
     if (!out_iface) {
         route = sr_arpcache_find_exact_route(sr, old_ip_hdr->ip_src);
@@ -156,7 +165,8 @@ static void sr_arpcache_send_host_unreachable(struct sr_instance *sr,
     icmp_hdr->icmp_type = 3;
     icmp_hdr->icmp_code = 1;
     icmp_hdr->unused = 0;
-    memcpy(icmp_hdr->data, old_ip_hdr, ICMP_DATA_SIZE);
+    icmp_data_len = old_ip_len < ICMP_DATA_SIZE ? old_ip_len : ICMP_DATA_SIZE;
+    memcpy(icmp_hdr->data, old_ip_hdr, icmp_data_len);
     icmp_hdr->icmp_sum = 0;
     icmp_hdr->icmp_sum = cksum(icmp_hdr, sizeof(sr_icmp_t11_hdr_t));
 
@@ -189,16 +199,6 @@ void sr_arpcache_sweepreqs(struct sr_instance *sr) {
                 sr_arpcache_send_arp_request(sr, req->ip, req->packets->iface);
                 req->sent = now;
                 req->times_sent++;
-
-                if (req->times_sent >= 5) {
-                    struct sr_packet *pkt = req->packets;
-
-                    while (pkt) {
-                        sr_arpcache_send_host_unreachable(sr, pkt->buf, pkt->len);
-                        pkt = pkt->next;
-                    }
-                    sr_arpreq_destroy(&(sr->cache), req);
-                }
             }
         }
 
