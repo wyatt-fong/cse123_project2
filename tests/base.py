@@ -193,9 +193,10 @@ class CSE123TestBase(unittest.TestCase):
             s2intf = server2.defaultIntf()
             clintf = client.defaultIntf()
             logging.info('Lab:')
-            s1intf.setIP('%s/8' % IP_SETTING['server1'])
-            s2intf.setIP('%s/8' % IP_SETTING['server2'])
-            clintf.setIP('%s/8' % IP_SETTING['client'])
+            host_prefix = 24 if pa2b else 8
+            s1intf.setIP('%s/%d' % (IP_SETTING['server1'], host_prefix))
+            s2intf.setIP('%s/%d' % (IP_SETTING['server2'], host_prefix))
+            clintf.setIP('%s/%d' % (IP_SETTING['client'], host_prefix))
 
             with nostdout():
                 for host in server1, server2, client:
@@ -247,6 +248,10 @@ class CSE123TestBase(unittest.TestCase):
         self.server1 = self._host_info("server1", "192.168.2.2", "192.168.2.1")
         self.server2 = self._host_info("server2", "172.64.3.10", "172.64.3.1")
         self.gateways = list(map(lambda x: x["gw"], [self.client, self.server1, self.server2]))
+
+        if pa2b:
+            for host in [self.client, self.server1, self.server2]:
+                host["m"].cmd("ip route replace default via {}".format(host["gw"]))
 
     def tearDownEnvironment(self):
         stophttp()
