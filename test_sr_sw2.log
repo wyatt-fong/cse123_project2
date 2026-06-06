@@ -1,0 +1,24 @@
+Using VNS sr stub code revised 2009-10-14 (rev 0.20)
+Loading routing table from server, clear local routing table.
+Loading routing table
+---------------------------------------------
+Destination	Gateway		Mask	Iface
+192.168.1.2		192.168.1.2	255.255.255.255	eth1
+192.168.0.0		192.168.0.1	255.255.0.0	eth2
+---------------------------------------------
+Client root connecting to Server localhost:8888
+Requesting topology 0
+successfully authenticated as root
+Loading routing table from server, clear local routing table.
+Loading routing table
+---------------------------------------------
+Destination	Gateway		Mask	Iface
+192.168.1.2		192.168.1.2	255.255.255.255	eth1
+192.168.0.0		192.168.0.1	255.255.0.0	eth2
+---------------------------------------------
+Router interfaces:
+eth2	HWaddre2:3d:e0:52:a4:75
+	inet addr 192.168.0.2
+eth1	HWaddr6a:fe:af:02:81:8d
+	inet addr 192.168.1.1
+ <-- Ready to process packets --> 
