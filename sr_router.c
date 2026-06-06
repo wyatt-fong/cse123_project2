@@ -44,6 +44,8 @@ static void sr_send_icmp_error(struct sr_instance* sr, uint8_t* packet,
                                unsigned int len, uint8_t type, uint8_t code);
 static void sr_forward_ip_packet(struct sr_instance* sr, uint8_t* packet,
                                  unsigned int len);
+static void sr_send_routed_ip_packet(struct sr_instance* sr, uint8_t* packet,
+                                     unsigned int len);
 
 /*---------------------------------------------------------------------
  * Method: sr_init(void)
@@ -467,12 +469,25 @@ static void sr_send_icmp_error(struct sr_instance* sr, uint8_t* packet,
   icmp_hdr->icmp_sum = 0;
   icmp_hdr->icmp_sum = cksum(icmp_hdr, sizeof(sr_icmp_t11_hdr_t));
 
-  sr_send_packet(sr, reply, reply_len, out_iface->name);
+  sr_send_routed_ip_packet(sr, reply, reply_len);
   free(reply);
 }
 
 static void sr_forward_ip_packet(struct sr_instance* sr, uint8_t* packet,
                                  unsigned int len)
+{
+  sr_ip_hdr_t* ip_hdr = (sr_ip_hdr_t*)(packet + sizeof(sr_ethernet_hdr_t));
+
+  if (!sr_find_lpm_route(sr, ip_hdr->ip_dst)) {
+    sr_send_icmp_error(sr, packet, len, 3, 0);
+    return;
+  }
+
+  sr_send_routed_ip_packet(sr, packet, len);
+}
+
+static void sr_send_routed_ip_packet(struct sr_instance* sr, uint8_t* packet,
+                                     unsigned int len)
 {
   sr_ip_hdr_t* ip_hdr = (sr_ip_hdr_t*)(packet + sizeof(sr_ethernet_hdr_t));
   sr_ethernet_hdr_t* eth_hdr;
@@ -484,7 +499,6 @@ static void sr_forward_ip_packet(struct sr_instance* sr, uint8_t* packet,
   uint8_t* forwarded_packet;
 
   if (!route) {
-    sr_send_icmp_error(sr, packet, len, 3, 0);
     return;
   }
 
