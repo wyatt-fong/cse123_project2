@@ -447,7 +447,7 @@ class PacketTest:
             self.buffer.not_full.notify_all()
 
     def sendPkt(self, pkt):
-        proc = self.node.popen(['python3', self.sender_path], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc = self.node.popen(['python3', self.sender_path, self.node.defaultIntf().name], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         result = proc.communicate(input=pkt.build())
         assert(len(result) > 0)
         result = re.findall("sent ([0-9]+) bytes", str(result[0]))
