@@ -127,6 +127,7 @@ class CSE123TestBase(unittest.TestCase):
 
     def _apply_pa2b_host_routes(self):
         for host in [self.client, self.server1, self.server2]:
+            host["m"].cmd("ip route del 192.0.0.0/8 2>/dev/null")
             host["m"].cmd("ip route replace default via {}".format(host["gw"]))
             host["m"].cmd("arp -s {} {}".format(host["gw"], host["gwmac"]))
 
@@ -213,6 +214,9 @@ class CSE123TestBase(unittest.TestCase):
             logging.info('Lab:')
             host_defaults = self._host_defaults(pa2b)
             host_prefix = 24 if pa2b else 8
+            if pa2b:
+                for host in server1, server2, client:
+                    host.cmd("ip addr flush dev {}".format(host.defaultIntf().name))
             s1intf.setIP('%s/%d' % (
                 IP_SETTING.get('server1', host_defaults["server1"][0]),
                 host_prefix))
