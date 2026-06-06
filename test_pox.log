@@ -9,9 +9,9 @@ DEBUG:core:Running on CPython (2.7.17/Mar 8 2023 18:40:28)
 DEBUG:core:Platform is Linux-6.10.14-linuxkit-aarch64-with-Ubuntu-18.04-bionic
 INFO:core:POX 0.6.0 (fangtooth) is up.
 DEBUG:openflow.of_01:Listening on 0.0.0.0:6653
-INFO:openflow.of_01:[00-00-00-00-00-01 3] connected
-DEBUG:ofhandler:Connection [00-00-00-00-00-01 3]
-DEBUG:srhandler:SRServerListener catch RouterInfo even for vhost=sw1, info={'eth3': ('192.168.0.9', 'e2:83:18:7a:6e:f6', '10Gbps', 3), 'eth2': ('192.168.0.5', 'd2:28:34:b3:9f:04', '10Gbps', 2), 'eth1': ('192.168.0.1', '92:68:5a:6f:09:e9', '10Gbps', 1)}, rtable=[('192.168.1.0', '192.168.0.2', '255.255.255.0', 'eth1'), ('192.168.2.0', '192.168.0.6', '255.255.255.240', 'eth2'), ('192.168.3.0', '192.168.0.10', '255.255.255.240', 'eth3'), ('192.168.0.2', '192.168.0.2', '255.255.255.255', 'eth1'), ('192.168.0.6', '192.168.0.6', '255.255.255.255', 'eth2'), ('192.168.0.10', '192.168.0.10', '255.255.255.255', 'eth3')]
+INFO:openflow.of_01:[00-00-00-00-00-01 4] connected
+DEBUG:ofhandler:Connection [00-00-00-00-00-01 4]
+DEBUG:srhandler:SRServerListener catch RouterInfo even for vhost=sw1, info={'eth3': ('192.168.0.9', '2a:07:92:3c:ac:02', '10Gbps', 3), 'eth2': ('192.168.0.5', 'd2:2c:1d:ff:a6:17', '10Gbps', 2), 'eth1': ('192.168.0.1', '9a:bc:c3:1c:44:7f', '10Gbps', 1)}, rtable=[('192.168.1.0', '192.168.0.2', '255.255.255.0', 'eth1'), ('192.168.2.0', '192.168.0.6', '255.255.255.240', 'eth2'), ('192.168.3.0', '192.168.0.10', '255.255.255.240', 'eth3'), ('192.168.0.2', '192.168.0.2', '255.255.255.255', 'eth1'), ('192.168.0.6', '192.168.0.6', '255.255.255.255', 'eth2'), ('192.168.0.10', '192.168.0.10', '255.255.255.255', 'eth3')]
 INFO:srhandler:sw1 eth3 3
 INFO:srhandler:sw1 eth2 2
 INFO:srhandler:sw1 eth1 1
