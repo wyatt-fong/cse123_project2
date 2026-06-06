@@ -131,6 +131,13 @@ class CSE123TestBase(unittest.TestCase):
             host["m"].cmd("ip route replace default via {}".format(host["gw"]))
             host["m"].cmd("arp -s {} {}".format(host["gw"], host["gwmac"]))
 
+        self.client["m"].cmd("ip route replace 192.168.2.0/24 via {}".format(self.client["gw"]))
+        self.client["m"].cmd("ip route replace 192.168.3.0/24 via {}".format(self.client["gw"]))
+        self.server1["m"].cmd("ip route replace 192.168.1.0/24 via {}".format(self.server1["gw"]))
+        self.server1["m"].cmd("ip route replace 192.168.3.0/24 via {}".format(self.server1["gw"]))
+        self.server2["m"].cmd("ip route replace 192.168.1.0/24 via {}".format(self.server2["gw"]))
+        self.server2["m"].cmd("ip route replace 192.168.2.0/24 via {}".format(self.server2["gw"]))
+
     def _start_router(self, router_path, args, log_name):
         log = open(os.path.join(self.SUBMISSION_DIR, log_name), 'w')
         router = pexpect.spawn(
