@@ -17,8 +17,8 @@ Destination	Gateway		Mask	Iface
 192.168.0.0		192.168.0.1	255.255.0.0	eth2
 ---------------------------------------------
 Router interfaces:
-eth2	HWaddr42:2c:16:2a:60:1e
+eth2	HWaddrde:f3:5a:4d:5f:1a
 	inet addr 192.168.0.2
-eth1	HWaddr0e:73:64:ea:d8:89
+eth1	HWaddr9a:fe:b6:4d:88:6e
 	inet addr 192.168.1.1
  <-- Ready to process packets --> 

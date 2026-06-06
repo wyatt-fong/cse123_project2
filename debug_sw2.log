@@ -1,0 +1,10 @@
+IP packet on eth1: src=192.168.1.2 dst=192.168.2.2 ttl=64 proto=1
+Route dst=192.168.2.2 via next-hop=192.168.0.1 out=eth2
+ARP cache miss; queue and ARP for 192.168.0.1 on eth2
+ARP reply on eth2: sender=192.168.0.1 target=192.168.0.2
+ARP cache hit for queued ip=192.168.0.1; sending queued packet on eth2
+IP packet on eth2: src=192.168.2.2 dst=192.168.1.2 ttl=62 proto=1
+Route dst=192.168.1.2 via next-hop=192.168.1.2 out=eth1
+ARP cache miss; queue and ARP for 192.168.1.2 on eth1
+ARP reply on eth1: sender=192.168.1.2 target=192.168.1.1
+ARP cache hit for queued ip=192.168.1.2; sending queued packet on eth1
