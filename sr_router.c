@@ -16,6 +16,7 @@
 #include <string.h>
 #include <time.h>
 #include <assert.h>
+#include <arpa/inet.h>
 
 
 #include "sr_if.h"
@@ -29,6 +30,7 @@ static int sr_is_router_ip(struct sr_instance* sr, uint32_t ip);
 static struct sr_if* sr_find_iface_by_mac(struct sr_instance* sr,
                                           const unsigned char* mac);
 static struct sr_rt* sr_find_lpm_route(struct sr_instance* sr, uint32_t ip);
+static const char* sr_ip_to_str(uint32_t ip, char* buf, size_t len);
 static int sr_valid_ip_packet(uint8_t* packet, unsigned int len);
 static void sr_handle_arp(struct sr_instance* sr, uint8_t* packet,
                           unsigned int len, char* interface);
@@ -58,6 +60,8 @@ void sr_init(struct sr_instance* sr)
 {
     /* REQUIRES */
     assert(sr);
+
+    setvbuf(stdout, NULL, _IONBF, 0);
 
     /* Initialize cache and cache cleanup thread */
     sr_arpcache_init(&(sr->cache));
@@ -101,6 +105,7 @@ void sr_handlepacket(struct sr_instance* sr,
   assert(interface);
 
   printf("*** -> Received packet of length %d \n",len);
+  fflush(stdout);
 
   if (len < sizeof(sr_ethernet_hdr_t)) {
     return;
@@ -163,6 +168,16 @@ static struct sr_rt* sr_find_lpm_route(struct sr_instance* sr, uint32_t ip)
   return best;
 }
 
+static const char* sr_ip_to_str(uint32_t ip, char* buf, size_t len)
+{
+  struct in_addr addr;
+  addr.s_addr = ip;
+  if (!inet_ntop(AF_INET, &addr, buf, len)) {
+    snprintf(buf, len, "<bad-ip>");
+  }
+  return buf;
+}
+
 static int sr_valid_ip_packet(uint8_t* packet, unsigned int len)
 {
   sr_ip_hdr_t* ip_hdr;
@@ -210,11 +225,21 @@ static void sr_handle_arp(struct sr_instance* sr, uint8_t* packet,
   }
 
   if (ntohs(arp_hdr->ar_op) == arp_op_request) {
+    char sip[INET_ADDRSTRLEN], tip[INET_ADDRSTRLEN];
+    Debug("ARP request on %s: sender=%s target=%s\n",
+          interface,
+          sr_ip_to_str(arp_hdr->ar_sip, sip, sizeof(sip)),
+          sr_ip_to_str(arp_hdr->ar_tip, tip, sizeof(tip)));
     sr_cache_arp_mapping(sr, arp_hdr);
     if (arp_hdr->ar_tip == recv_iface->ip) {
       sr_send_arp_reply(sr, arp_hdr, interface);
     }
   } else if (ntohs(arp_hdr->ar_op) == arp_op_reply) {
+    char sip[INET_ADDRSTRLEN], tip[INET_ADDRSTRLEN];
+    Debug("ARP reply on %s: sender=%s target=%s\n",
+          interface,
+          sr_ip_to_str(arp_hdr->ar_sip, sip, sizeof(sip)),
+          sr_ip_to_str(arp_hdr->ar_tip, tip, sizeof(tip)));
     if (!sr_is_router_ip(sr, arp_hdr->ar_tip)) {
       return;
     }
@@ -234,6 +259,10 @@ static void sr_cache_arp_mapping(struct sr_instance* sr, sr_arp_hdr_t* arp_hdr)
       struct sr_if* out_iface = sr_get_interface(sr, queued_pkt->iface);
 
       if (out_iface) {
+        char sip[INET_ADDRSTRLEN];
+        Debug("ARP cache hit for queued ip=%s; sending queued packet on %s\n",
+              sr_ip_to_str(arp_hdr->ar_sip, sip, sizeof(sip)),
+              queued_pkt->iface);
         memcpy(eth_hdr->ether_dhost, arp_hdr->ar_sha, ETHER_ADDR_LEN);
         memcpy(eth_hdr->ether_shost, out_iface->addr, ETHER_ADDR_LEN);
         sr_send_packet(sr, queued_pkt->buf, queued_pkt->len, queued_pkt->iface);
@@ -250,11 +279,21 @@ static void sr_handle_ip(struct sr_instance* sr, uint8_t* packet,
   unsigned int ip_header_len;
 
   if (!sr_valid_ip_packet(packet, len)) {
+    Debug("Dropping invalid IP packet on %s\n", interface);
     return;
   }
 
   ip_hdr = (sr_ip_hdr_t*)(packet + sizeof(sr_ethernet_hdr_t));
   ip_header_len = ip_hdr->ip_hl * 4;
+  {
+    char src[INET_ADDRSTRLEN], dst[INET_ADDRSTRLEN];
+    Debug("IP packet on %s: src=%s dst=%s ttl=%u proto=%u\n",
+          interface,
+          sr_ip_to_str(ip_hdr->ip_src, src, sizeof(src)),
+          sr_ip_to_str(ip_hdr->ip_dst, dst, sizeof(dst)),
+          ip_hdr->ip_ttl,
+          ip_hdr->ip_p);
+  }
 
   if (sr_is_router_ip(sr, ip_hdr->ip_dst)) {
     if (ip_hdr->ip_p == ip_protocol_icmp &&
@@ -509,11 +548,15 @@ static void sr_send_routed_ip_packet(struct sr_instance* sr, uint8_t* packet,
   uint8_t* forwarded_packet;
 
   if (!route) {
+    char dst[INET_ADDRSTRLEN];
+    Debug("No route for dst=%s\n",
+          sr_ip_to_str(ip_hdr->ip_dst, dst, sizeof(dst)));
     return;
   }
 
   out_iface = sr_get_interface(sr, route->interface);
   if (!out_iface) {
+    Debug("Route has missing interface %s\n", route->interface);
     return;
   }
 
@@ -526,8 +569,16 @@ static void sr_send_routed_ip_packet(struct sr_instance* sr, uint8_t* packet,
   eth_hdr = (sr_ethernet_hdr_t*)forwarded_packet;
   next_hop_ip = route->gw.s_addr ? route->gw.s_addr : ip_hdr->ip_dst;
   entry = sr_arpcache_lookup(&(sr->cache), next_hop_ip);
+  {
+    char dst[INET_ADDRSTRLEN], hop[INET_ADDRSTRLEN];
+    Debug("Route dst=%s via next-hop=%s out=%s\n",
+          sr_ip_to_str(ip_hdr->ip_dst, dst, sizeof(dst)),
+          sr_ip_to_str(next_hop_ip, hop, sizeof(hop)),
+          out_iface->name);
+  }
 
   if (entry) {
+    Debug("ARP cache hit; sending on %s\n", out_iface->name);
     memcpy(eth_hdr->ether_dhost, entry->mac, ETHER_ADDR_LEN);
     memcpy(eth_hdr->ether_shost, out_iface->addr, ETHER_ADDR_LEN);
     sr_send_packet(sr, forwarded_packet, len, out_iface->name);
@@ -540,6 +591,10 @@ static void sr_send_routed_ip_packet(struct sr_instance* sr, uint8_t* packet,
                              forwarded_packet, len, out_iface->name);
 
   if (req && req->times_sent == 0) {
+    char hop[INET_ADDRSTRLEN];
+    Debug("ARP cache miss; queue and ARP for %s on %s\n",
+          sr_ip_to_str(req->ip, hop, sizeof(hop)),
+          out_iface->name);
     sr_send_arp_request(sr, req->ip, out_iface->name);
     req->sent = time(NULL);
     req->times_sent++;
