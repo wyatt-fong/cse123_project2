@@ -188,17 +188,22 @@ struct sr_arpreq *sr_arpcache_insert(struct sr_arpcache *cache,
         prev = req;
     }
     
-    int i;
+    int i, slot = -1;
     for (i = 0; i < SR_ARPCACHE_SZ; i++) {
-        if (!(cache->entries[i].valid))
+        if (cache->entries[i].valid && cache->entries[i].ip == ip) {
+            slot = i;
             break;
+        }
+        if (slot == -1 && !(cache->entries[i].valid)) {
+            slot = i;
+        }
     }
     
-    if (i != SR_ARPCACHE_SZ) {
-        memcpy(cache->entries[i].mac, mac, 6);
-        cache->entries[i].ip = ip;
-        cache->entries[i].added = time(NULL);
-        cache->entries[i].valid = 1;
+    if (slot != -1) {
+        memcpy(cache->entries[slot].mac, mac, 6);
+        cache->entries[slot].ip = ip;
+        cache->entries[slot].added = time(NULL);
+        cache->entries[slot].valid = 1;
     }
     
     pthread_mutex_unlock(&(cache->lock));

@@ -36,6 +36,7 @@ static void sr_handle_ip(struct sr_instance* sr, uint8_t* packet,
                          unsigned int len, char* interface);
 static void sr_send_arp_reply(struct sr_instance* sr, sr_arp_hdr_t* arp_hdr,
                               const char* interface);
+static void sr_cache_arp_mapping(struct sr_instance* sr, sr_arp_hdr_t* arp_hdr);
 static void sr_send_icmp_echo_reply(struct sr_instance* sr, uint8_t* packet,
                                     unsigned int len, char* interface);
 static void sr_send_arp_request(struct sr_instance* sr, uint32_t ip,
@@ -195,39 +196,50 @@ static void sr_handle_arp(struct sr_instance* sr, uint8_t* packet,
                           unsigned int len, char* interface)
 {
   sr_arp_hdr_t* arp_hdr;
-  struct sr_arpreq* req;
-  struct sr_packet* queued_pkt;
+  struct sr_if* recv_iface;
 
   if (len < sizeof(sr_ethernet_hdr_t) + sizeof(sr_arp_hdr_t)) {
     return;
   }
 
   arp_hdr = (sr_arp_hdr_t*)(packet + sizeof(sr_ethernet_hdr_t));
+  recv_iface = sr_get_interface(sr, interface);
+
+  if (!recv_iface || arp_hdr->ar_sip == 0) {
+    return;
+  }
 
   if (ntohs(arp_hdr->ar_op) == arp_op_request) {
-    struct sr_if* recv_iface = sr_get_interface(sr, interface);
-    if (recv_iface && arp_hdr->ar_tip == recv_iface->ip) {
+    sr_cache_arp_mapping(sr, arp_hdr);
+    if (arp_hdr->ar_tip == recv_iface->ip) {
       sr_send_arp_reply(sr, arp_hdr, interface);
     }
   } else if (ntohs(arp_hdr->ar_op) == arp_op_reply) {
     if (!sr_is_router_ip(sr, arp_hdr->ar_tip)) {
       return;
     }
+    sr_cache_arp_mapping(sr, arp_hdr);
+  }
+}
 
-    req = sr_arpcache_insert(&(sr->cache), arp_hdr->ar_sha, arp_hdr->ar_sip);
-    if (req) {
-      for (queued_pkt = req->packets; queued_pkt; queued_pkt = queued_pkt->next) {
-        sr_ethernet_hdr_t* eth_hdr = (sr_ethernet_hdr_t*)queued_pkt->buf;
-        struct sr_if* out_iface = sr_get_interface(sr, queued_pkt->iface);
+static void sr_cache_arp_mapping(struct sr_instance* sr, sr_arp_hdr_t* arp_hdr)
+{
+  struct sr_arpreq* req;
+  struct sr_packet* queued_pkt;
 
-        if (out_iface) {
-          memcpy(eth_hdr->ether_dhost, arp_hdr->ar_sha, ETHER_ADDR_LEN);
-          memcpy(eth_hdr->ether_shost, out_iface->addr, ETHER_ADDR_LEN);
-          sr_send_packet(sr, queued_pkt->buf, queued_pkt->len, queued_pkt->iface);
-        }
+  req = sr_arpcache_insert(&(sr->cache), arp_hdr->ar_sha, arp_hdr->ar_sip);
+  if (req) {
+    for (queued_pkt = req->packets; queued_pkt; queued_pkt = queued_pkt->next) {
+      sr_ethernet_hdr_t* eth_hdr = (sr_ethernet_hdr_t*)queued_pkt->buf;
+      struct sr_if* out_iface = sr_get_interface(sr, queued_pkt->iface);
+
+      if (out_iface) {
+        memcpy(eth_hdr->ether_dhost, arp_hdr->ar_sha, ETHER_ADDR_LEN);
+        memcpy(eth_hdr->ether_shost, out_iface->addr, ETHER_ADDR_LEN);
+        sr_send_packet(sr, queued_pkt->buf, queued_pkt->len, queued_pkt->iface);
       }
-      sr_arpreq_destroy(&(sr->cache), req);
     }
+    sr_arpreq_destroy(&(sr->cache), req);
   }
 }
 
