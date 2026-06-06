@@ -40,8 +40,6 @@ static void sr_send_icmp_echo_reply(struct sr_instance* sr, uint8_t* packet,
                                     unsigned int len, char* interface);
 static void sr_send_arp_request(struct sr_instance* sr, uint32_t ip,
                                 const char* iface);
-static void sr_send_icmp_error(struct sr_instance* sr, uint8_t* packet,
-                               unsigned int len, uint8_t type, uint8_t code);
 static void sr_forward_ip_packet(struct sr_instance* sr, uint8_t* packet,
                                  unsigned int len);
 static void sr_send_routed_ip_packet(struct sr_instance* sr, uint8_t* packet,
@@ -397,8 +395,8 @@ static void sr_send_icmp_echo_reply(struct sr_instance* sr, uint8_t* packet,
   free(reply);
 }
 
-static void sr_send_icmp_error(struct sr_instance* sr, uint8_t* packet,
-                               unsigned int len, uint8_t type, uint8_t code)
+void sr_send_icmp_error(struct sr_instance* sr, uint8_t* packet,
+                        unsigned int len, uint8_t type, uint8_t code)
 {
   sr_ip_hdr_t* old_ip_hdr;
   sr_ethernet_hdr_t* old_eth_hdr;
