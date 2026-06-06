@@ -1,6 +1,7 @@
 from base import *
 import unittest
 import random
+import re
 
 
 class TestPA2BFunctionality(CSE123TestBase):
@@ -15,32 +16,62 @@ class TestPA2BFunctionality(CSE123TestBase):
     def _client_icmp_packets(self, wait=0.7):
         return [pkt for pkt, _ in self.expectPackets("client", type="icmp", timewait_sec=wait)]
 
-    def test_ping_servers_through_multi_router_topology(self):
-        output = self.client["m"].cmd("ping -c 1 {}".format(self.server1["ip"]))
-        self.assertTrue("1 packets received" in output,
-                        msg="ICMP request failed between client and server1")
+    def _assert_ping_received(self, host, dst, name):
+        output = host["m"].cmd("ping -c 1 -W 3 {}".format(dst["ip"]))
+        received_one = re.search(r"1 (packets )?received", output) is not None
+        self.assertTrue(received_one,
+                        msg="ICMP request failed between {} and {}:\n{}".format(
+                            host["m"].name, name, output))
 
-        output = self.client["m"].cmd("ping -c 1 {}".format(self.server2["ip"]))
-        self.assertTrue("1 packets received" in output,
-                        msg="ICMP request failed between client and server2")
+    def _assert_traceroute_reached(self, host, dst, name):
+        output = host["m"].cmd("traceroute -w 2 -q 1 {}".format(dst["ip"]))
+        hop_lines = [
+            line for line in output.splitlines()
+            if re.match(r"^\s*\d+\s+", line)
+        ]
+        reached = any(dst["ip"] in line for line in hop_lines)
+        self.assertTrue(reached,
+                        msg="Traceroute did not reach {}:\n{}".format(name, output))
+
+    def _assert_http_reached(self, host, dst, name):
+        output = host["m"].cmd("wget -T 5 -t 1 -O- http://{}".format(dst["ip"]))
+        self.assertIn("Congratulations", output,
+                      msg="HTTP request did not reach {}:\n{}".format(name, output))
+
+    def test_ping_servers_through_multi_router_topology(self):
+        self._assert_ping_received(self.client, self.server1, "server1")
+        self._assert_ping_received(self.client, self.server2, "server2")
+
+    def test_icmp_echo_request_is_forwarded_to_servers(self):
+        for dst_name, dst in [("server1", self.server1), ("server2", self.server2)]:
+            self.clearPcapBuffers()
+            echo_id = random.randint(1, 65535)
+            pkt = (
+                Ether(src=self.client["mac"], dst=self.client["gwmac"]) /
+                IP(src=self.client["ip"], dst=dst["ip"], id=random.randint(1, 65535)) /
+                ICMP(type=8, id=echo_id, seq=1)
+            )
+
+            self.sendPacket(pkt, node=self.client["m"].name)
+
+            requests = [
+                p for p, _ in self.expectPackets(dst["m"].name, type="icmp", timewait_sec=0.7)
+                if p.haslayer(ICMP)
+                and p[ICMP].type == 8
+                and p[ICMP].id == echo_id
+                and p[IP].src == self.client["ip"]
+                and p[IP].dst == dst["ip"]
+            ]
+            self.assertTrue(requests,
+                            msg="Router path did not forward ICMP echo request to {}".format(dst_name))
 
     def test_traceroute_reaches_servers(self):
-        output = self.client["m"].cmd("traceroute {}".format(self.server1["ip"]))
-        self.assertIn(self.server1["ip"], output,
-                      msg="Traceroute did not reach server1")
-
-        output = self.client["m"].cmd("traceroute {}".format(self.server2["ip"]))
-        self.assertIn(self.server2["ip"], output,
-                      msg="Traceroute did not reach server2")
+        self._assert_traceroute_reached(self.client, self.server1, "server1")
+        self._assert_traceroute_reached(self.client, self.server2, "server2")
 
     def test_tcp_http_reaches_servers(self):
-        output = self.client["m"].cmd("wget -T 5 -O- http://{}".format(self.server1["ip"]))
-        self.assertIn("Congratulations", output,
-                      msg="HTTP request did not reach server1")
-
-        output = self.client["m"].cmd("wget -T 5 -O- http://{}".format(self.server2["ip"]))
-        self.assertIn("Congratulations", output,
-                      msg="HTTP request did not reach server2")
+        self._assert_http_reached(self.client, self.server1, "server1")
+        self._assert_http_reached(self.client, self.server2, "server2")
 
     def test_udp_to_router_generates_port_unreachable(self):
         self.clearPcapBuffers()

@@ -252,6 +252,7 @@ class CSE123TestBase(unittest.TestCase):
         if pa2b:
             for host in [self.client, self.server1, self.server2]:
                 host["m"].cmd("ip route replace default via {}".format(host["gw"]))
+                host["m"].cmd("arp -s {} {}".format(host["gw"], host["gwmac"]))
 
     def tearDownEnvironment(self):
         stophttp()
