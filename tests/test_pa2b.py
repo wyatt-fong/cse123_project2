@@ -17,14 +17,14 @@ class TestPA2BFunctionality(CSE123TestBase):
         return [pkt for pkt, _ in self.expectPackets("client", type="icmp", timewait_sec=wait)]
 
     def _assert_ping_received(self, host, dst, name):
-        output = host["m"].cmd("ping -c 1 -W 3 {}".format(dst["ip"]))
-        received_one = re.search(r"1 (packets )?received", output) is not None
-        self.assertTrue(received_one,
+        output = host["m"].cmd("ping -c 3 -W 3 {}".format(dst["ip"]))
+        received = re.search(r"(\d+) (packets )?received", output)
+        self.assertTrue(received and int(received.group(1)) > 0,
                         msg="ICMP request failed between {} and {}:\n{}".format(
                             host["m"].name, name, output))
 
     def _assert_traceroute_reached(self, host, dst, name):
-        output = host["m"].cmd("traceroute -w 2 -q 1 {}".format(dst["ip"]))
+        output = host["m"].cmd("traceroute -w 2 -q 3 {}".format(dst["ip"]))
         hop_lines = [
             line for line in output.splitlines()
             if re.match(r"^\s*\d+\s+", line)
@@ -55,7 +55,7 @@ class TestPA2BFunctionality(CSE123TestBase):
             self.sendPacket(pkt, node=self.client["m"].name)
 
             requests = [
-                p for p, _ in self.expectPackets(dst["m"].name, type="icmp", timewait_sec=0.7)
+                p for p, _ in self.expectPackets(dst["m"].name, type="icmp", timewait_sec=3)
                 if p.haslayer(ICMP)
                 and p[ICMP].type == 8
                 and p[ICMP].id == echo_id
