@@ -112,6 +112,24 @@ class CSE123TestBase(unittest.TestCase):
             "gw_intf": peer_intf.name,
         }
 
+    def _host_defaults(self, pa2b):
+        if pa2b:
+            return {
+                "client": ("192.168.1.2", "192.168.1.1"),
+                "server1": ("192.168.2.2", "192.168.2.1"),
+                "server2": ("192.168.3.2", "192.168.3.1"),
+            }
+        return {
+            "client": ("10.0.1.100", "10.0.1.1"),
+            "server1": ("192.168.2.2", "192.168.2.1"),
+            "server2": ("172.64.3.10", "172.64.3.1"),
+        }
+
+    def _apply_pa2b_host_routes(self):
+        for host in [self.client, self.server1, self.server2]:
+            host["m"].cmd("ip route replace default via {}".format(host["gw"]))
+            host["m"].cmd("arp -s {} {}".format(host["gw"], host["gwmac"]))
+
     def _start_router(self, router_path, args, log_name):
         log = open(os.path.join(self.SUBMISSION_DIR, log_name), 'w')
         router = pexpect.spawn(
@@ -193,14 +211,30 @@ class CSE123TestBase(unittest.TestCase):
             s2intf = server2.defaultIntf()
             clintf = client.defaultIntf()
             logging.info('Lab:')
+            host_defaults = self._host_defaults(pa2b)
             host_prefix = 24 if pa2b else 8
-            s1intf.setIP('%s/%d' % (IP_SETTING['server1'], host_prefix))
-            s2intf.setIP('%s/%d' % (IP_SETTING['server2'], host_prefix))
-            clintf.setIP('%s/%d' % (IP_SETTING['client'], host_prefix))
+            s1intf.setIP('%s/%d' % (
+                IP_SETTING.get('server1', host_defaults["server1"][0]),
+                host_prefix))
+            s2intf.setIP('%s/%d' % (
+                IP_SETTING.get('server2', host_defaults["server2"][0]),
+                host_prefix))
+            clintf.setIP('%s/%d' % (
+                IP_SETTING.get('client', host_defaults["client"][0]),
+                host_prefix))
 
-            with nostdout():
-                for host in server1, server2, client:
-                    set_default_route(host)
+            self.client = self._host_info("client", *host_defaults["client"])
+            self.server1 = self._host_info("server1", *host_defaults["server1"])
+            self.server2 = self._host_info("server2", *host_defaults["server2"])
+            self.gateways = list(map(lambda x: x["gw"], [self.client, self.server1, self.server2]))
+
+            if pa2b:
+                self._apply_pa2b_host_routes()
+            else:
+                with nostdout():
+                    for host in server1, server2, client:
+                        set_default_route(host)
+
             starthttp( server1 )
             starthttp( server2 )
             self.pox.expect('.*srhandler:SRServerListener catch RouterInfo even.*')
@@ -243,16 +277,6 @@ class CSE123TestBase(unittest.TestCase):
         self.pcap_stream_client.run()
         self.pcap_stream_server1.run()
         self.pcap_stream_server2.run()
-
-        self.client = self._host_info("client", "10.0.1.100", "10.0.1.1")
-        self.server1 = self._host_info("server1", "192.168.2.2", "192.168.2.1")
-        self.server2 = self._host_info("server2", "172.64.3.10", "172.64.3.1")
-        self.gateways = list(map(lambda x: x["gw"], [self.client, self.server1, self.server2]))
-
-        if pa2b:
-            for host in [self.client, self.server1, self.server2]:
-                host["m"].cmd("ip route replace default via {}".format(host["gw"]))
-                host["m"].cmd("arp -s {} {}".format(host["gw"], host["gwmac"]))
 
     def tearDownEnvironment(self):
         stophttp()
