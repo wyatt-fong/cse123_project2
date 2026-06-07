@@ -28,6 +28,9 @@
 static int sr_is_router_ip(struct sr_instance* sr, uint32_t ip);
 static struct sr_if* sr_find_iface_by_mac(struct sr_instance* sr,
                                           const unsigned char* mac);
+static struct sr_if* sr_find_icmp_source_iface(struct sr_instance* sr,
+                                               sr_ethernet_hdr_t* eth_hdr,
+                                               uint32_t ip_src);
 static struct sr_rt* sr_find_lpm_route(struct sr_instance* sr, uint32_t ip);
 static int sr_valid_ip_packet(uint8_t* packet, unsigned int len);
 static void sr_handle_arp(struct sr_instance* sr, uint8_t* packet,
@@ -139,6 +142,31 @@ static struct sr_if* sr_find_iface_by_mac(struct sr_instance* sr,
   }
 
   return NULL;
+}
+
+static struct sr_if* sr_find_icmp_source_iface(struct sr_instance* sr,
+                                               sr_ethernet_hdr_t* eth_hdr,
+                                               uint32_t ip_src)
+{
+  struct sr_if* iface;
+  struct sr_rt* route;
+
+  iface = sr_find_iface_by_mac(sr, eth_hdr->ether_shost);
+  if (iface) {
+    return iface;
+  }
+
+  iface = sr_find_iface_by_mac(sr, eth_hdr->ether_dhost);
+  if (iface) {
+    return iface;
+  }
+
+  route = sr_find_lpm_route(sr, ip_src);
+  if (!route) {
+    return NULL;
+  }
+
+  return sr_get_interface(sr, route->interface);
 }
 
 static struct sr_rt* sr_find_lpm_route(struct sr_instance* sr, uint32_t ip)
@@ -426,18 +454,9 @@ void sr_send_icmp_error(struct sr_instance* sr, uint8_t* packet,
   old_eth_hdr = (sr_ethernet_hdr_t*)packet;
   old_ip_hdr = (sr_ip_hdr_t*)(packet + sizeof(sr_ethernet_hdr_t));
   old_ip_len = ntohs(old_ip_hdr->ip_len);
-  out_iface = sr_find_iface_by_mac(sr, old_eth_hdr->ether_dhost);
+  out_iface = sr_find_icmp_source_iface(sr, old_eth_hdr, old_ip_hdr->ip_src);
   if (!out_iface) {
-    struct sr_rt* route = sr_find_lpm_route(sr, old_ip_hdr->ip_src);
-
-    if (!route) {
-      return;
-    }
-
-    out_iface = sr_get_interface(sr, route->interface);
-    if (!out_iface) {
-      return;
-    }
+    return;
   }
 
   reply_len = sizeof(sr_ethernet_hdr_t) + sizeof(sr_ip_hdr_t) +
@@ -522,6 +541,7 @@ static void sr_send_routed_ip_packet(struct sr_instance* sr, uint8_t* packet,
 
   memcpy(forwarded_packet, packet, len);
   eth_hdr = (sr_ethernet_hdr_t*)forwarded_packet;
+  memcpy(eth_hdr->ether_shost, out_iface->addr, ETHER_ADDR_LEN);
   next_hop_ip = route->gw.s_addr ? route->gw.s_addr : ip_hdr->ip_dst;
   entry = sr_arpcache_lookup(&(sr->cache), next_hop_ip);
 
